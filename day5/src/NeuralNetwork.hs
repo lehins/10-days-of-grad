@@ -115,11 +115,11 @@ sigmoid' x dY =
       y = sigmoid x
       y' = delay y
 
-      -- compute $ dY .*. y .*. (ones .-. y)
-      e1 = maybe (error "Inconsistent dimensions#1") id (ones .-. y')
-      e2 = maybe (error "Inconsistent dimensions#2") id (y' .*. e1)
-      e3 = maybe (error "Inconsistent dimensions#3") compute (delay dY .*. e1)
-  in e3
+   -- compute $ dY .*. y .*. (ones .-. y)
+   in either throw compute $ do
+          e1 <- ones .-. y'
+          e2 <- y' .*. e1
+          delay dY .*. e2
 
 relu :: Index ix => Array U ix Float -> Array U ix Float
 relu = computeMap (max 0.0)
@@ -246,7 +246,9 @@ pass phase net (x, tgt) = (pred, grads)
     _pass inp (Linear w b:layers) = (dX, pred, LinearGradients dW dB:t)
       where
         -- Forward
+        -- Multiply by weights
         prod = maybe (error "Inconsistent dimensions") id (inp |*| w)
+        -- Add bias
         lin = maybe (error "Inconsistent dimensions") compute (delay prod .+. (b `rowsLike` inp))
 
         (dZ, pred, t) = _pass lin layers
