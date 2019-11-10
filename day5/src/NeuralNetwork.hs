@@ -7,7 +7,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module NeuralNetwork
-  ( ConvNet
+  ( NeuralNetwork
   , Layer (..)
   , Matrix
   , Vector
@@ -73,7 +73,7 @@ data Layer a = Linear (Matrix a) (Vector a)
 -- The main difference from the previous NeuralNetwork type
 -- is that the network input is a volume, not a vector
 -- (or volume-4, not matrix when in a batch)
-type ConvNet a = [Layer a]
+type NeuralNetwork a = [Layer a]
 
 data Gradients a = -- Weight and bias gradients
                    LinearGradients (Matrix a) (Vector a)
@@ -206,7 +206,7 @@ bias' dY = compute $ m *. (_sumRows $ delay dY)
 -- exploit Haskell lazyness to never compute the
 -- gradients.
 forward
-  :: ConvNet Float -> Volume4 Float -> Matrix Float
+  :: NeuralNetwork Float -> Matrix Float -> Matrix Float
 forward net dta = fst $ pass Eval net (dta, undefined)
 
 softmax :: Matrix Float -> Matrix Float
@@ -214,19 +214,57 @@ softmax x =
   let x0 = expA (delay x)
       x1 = computeAs U $ _sumCols x0  -- Note _sumCols, not _sumRows
       x2 = x1 `colsLike` x
-  in maybe (error  "Inconsistent dimensions in softmax") compute (x0 ./. x2)
+  in maybe (error "Inconsistent dimensions in softmax") compute (x0 ./. x2)
 
 -- | Both forward and backward neural network passes
 pass
   :: Phase
   -- ^ `Train` or `Eval`
-  -> ConvNet Float
-  -- ^ `ConvNet` `Layer`s: weights and activations
-  -> (Volume4 Float, Matrix Float)
+  -> NeuralNetwork Float
+  -- ^ `NeuralNetwork` `Layer`s: weights and activations
+  -> (Matrix Float, Matrix Float)
   -- ^ Mini-batch with labels
   -> (Matrix Float, [Gradients Float])
   -- ^ NN computation from forward pass and weights gradients
-pass = undefined
+pass phase net (x, tgt) = (pred, grads)
+  where
+    (_, pred, grads) = _pass x net
+
+    -- Computes a tuple of:
+    -- 1) Gradients for further backward pass
+    -- 2) NN prediction
+    -- 3) Gradients of learnable parameters (where applicable)
+    _pass inp [] = (loss', pred, [])
+      where
+        -- TODO: Make softmax/loss/loss gradient a part of SGD/Adam?
+        pred = softmax inp
+
+        -- Gradient of cross-entropy loss
+        -- after softmax activation.
+        loss' = maybe (error "Dimension mismatch") compute (delay pred .-. delay tgt)
+
+    _pass inp (Linear w b:layers) = (dX, pred, LinearGradients dW dB:t)
+      where
+        -- Forward
+        prod = maybe (error "Inconsistent dimensions") id (inp |*| w)
+        lin = maybe (error "Inconsistent dimensions") compute (delay prod .+. (b `rowsLike` inp))
+
+        (dZ, pred, t) = _pass lin layers
+
+        -- Backward
+        dW = linearW' inp dZ
+        dB = bias' dZ
+        dX = linearX' w dZ
+
+    _pass inp (Activation symbol:layers) = (dY, pred, NoGrad:t)
+      where
+        y = getActivation symbol inp  -- Forward
+
+        (dZ, pred, t) = _pass y layers
+
+        dY = getActivation' symbol inp dZ  -- Backward
+
+    _pass _ _ = error "Not implemented"
 
 -- | Broadcast a vector in Dim2
 rowsLike :: Manifest r Ix1 Float
@@ -254,18 +292,18 @@ sgd :: Monad m
   -- ^ Learning rate
   -> Int
   -- ^ No of iterations
-  -> ConvNet Float
+  -> NeuralNetwork Float
   -- ^ Neural network
-  -> SerialT m (Volume4 Float, Matrix Float)
+  -> SerialT m (Matrix Float, Matrix Float)
   -- ^ Data stream
-  -> m (ConvNet Float)
+  -> m (NeuralNetwork Float)
 sgd lr n net0 dataStream = iterN n epochStep net0
   where
     epochStep net = S.foldl' g net dataStream
 
-    g :: ConvNet Float
-      -> (Volume4 Float, Matrix Float)
-      -> ConvNet Float
+    g :: NeuralNetwork Float
+      -> (Matrix Float, Matrix Float)
+      -> NeuralNetwork Float
     g net dta =
       let (_, dW) = pass Train net dta
       in (zipWith f net dW)
@@ -278,7 +316,7 @@ sgd lr n net0 dataStream = iterN n epochStep net0
           b1 = subtractGradMaybe lr b dB
       in Linear w1 b1
 
-    f (Conv2d w) (Conv2dGradients dW) = Conv2d (subtractGradMaybe lr w dW)
+    f (Conv2d w) (Conv2dGradients dW) = error "Not implemented"
 
     -- No parameters to change
     f layer NoGrad = layer
@@ -338,8 +376,8 @@ accuracy tgt pr = 100 * r
     r = 1 - fromIntegral errNo / fromIntegral (length tgt)
 {-# SPECIALIZE accuracy :: [Int] -> [Int] -> Float #-}
 
-_accuracy :: ConvNet Float
-  -> (Volume4 Float, Matrix Float)
+_accuracy :: NeuralNetwork Float
+  -> (Matrix Float, Matrix Float)
   -> Float
 -- NB: better avoid double conversion to and from one-hot-encoding
 _accuracy net (batch, labelsOneHot) =
@@ -349,8 +387,8 @@ _accuracy net (batch, labelsOneHot) =
 
 avgAccuracy
   :: Monad m
-  => ConvNet Float
-  -> SerialT m (Volume4 Float, Matrix Float)
+  => NeuralNetwork Float
+  -> SerialT m (Matrix Float, Matrix Float)
   -> m Float
 avgAccuracy net stream = s // len
   where

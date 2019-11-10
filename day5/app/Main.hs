@@ -58,6 +58,8 @@ infixl 9 ~>
 (~>) :: (a -> b) -> (b -> c) -> a -> c
 f ~> g = g. f
 
+-- Train with static (no grad) features
+
 testLeNet :: IO ()
 testLeNet = do
   -- By convention, the first dimension is channels
