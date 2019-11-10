@@ -34,10 +34,11 @@ loadMNIST fpI fpL = runMaybeT $ do
     return r
   where
     _conv :: (Int, V.Vector Int) -> (Matrix Float, Matrix Float)
-    _conv (label, v) = (v1, toOneHot10 label)
+    _conv (label, v) = (resize' (Sz2 1 (3 * 5 * 5)) (lenetFeatures v1), toOneHot10 label)
       where
         v0 = V.map ((`subtract` 0.5). (/ 255). fromIntegral) v
-        v1 = A.fromVector' Par (Sz2 1 784) v0
+
+        v1 = A.fromVector' Par (Sz3 1 28 28) v0
 
 toOneHot10 :: Int -> Matrix Float
 toOneHot10 n = A.makeArrayR U Par (Sz2 1 10) (\(_ :. j) -> if j == n then 1 else 0)
@@ -58,12 +59,41 @@ mnistStream batchSize fpI fpL = do
       dta' = zip vs' labs'
   return $ S.fromList dta'
 
+data TrainSettings = TrainSettings
+  { _printEpochs :: Int  -- Print every N epochs
+  , _lr :: Float  -- Learning rate
+  , _totalEpochs :: Int  -- Number of training epochs
+  }
+
+train
+  :: TrainSettings
+  -> NeuralNetwork Float
+  -> (SerialT IO (Matrix Float, Matrix Float),
+      SerialT IO (Matrix Float, Matrix Float))
+  -> IO (NeuralNetwork Float)
+train TrainSettings { _printEpochs = printEpochs
+                    , _lr = lr
+                    , _totalEpochs = totalEpochs
+                    } net (trainS, testS) = do
+  (net', _) <- iterN (totalEpochs `div` printEpochs) (\(net0, j) -> do
+    net1 <- sgd lr printEpochs net0 trainS
+
+    tacc <- net1 `avgAccuracy` trainS :: IO Float
+    putStr $ printf "%d Training accuracy %.1f" (j :: Int) tacc
+
+    acc <- net1 `avgAccuracy` testS :: IO Float
+    putStrLn $ printf "  Validation accuracy %.1f" acc
+
+    return (net1, j + printEpochs)
+    ) (net, 1)
+  return net'
+
 main :: IO ()
 main = do
   trainS <- mnistStream 1000 "data/train-images-idx3-ubyte" "data/train-labels-idx1-ubyte"
   testS <- mnistStream 1000 "data/t10k-images-idx3-ubyte" "data/t10k-labels-idx1-ubyte"
 
-  let [i, h1, h2, o] = [784, 300, 50, 10]
+  let [i, h1, h2, o] = [3 * 5 * 5, 120, 84, 10]
   (w1, b1) <- genWeights (i, h1)
   (w2, b2) <- genWeights (h1, h2)
   (w3, b3) <- genWeights (h2, o)
@@ -75,20 +105,12 @@ main = do
             , Linear w3 b3
             ]
 
-  -- Crucial parameters: initial weights magnitude and
-  -- learning rate (lr)
-  let epochs = 10
-      lr = 0.1
+  net' <- train TrainSettings { _printEpochs = 1
+                              , _lr = 0.1
+                              , _totalEpochs = 10
+                              } net (trainS, testS)
 
-  net' <- sgd lr epochs net trainS
-
-  putStrLn $ printf "%d training epochs" epochs
-
-  tacc <- net' `avgAccuracy` trainS
-  putStrLn $ printf "Training accuracy %.1f" tacc
-
-  acc <- net' `avgAccuracy` testS
-  putStrLn $ printf "Validation accuracy %.1f" acc
+  return ()
 
 writeImageY :: FilePath -> Matrix Float -> IO ()
 writeImageY f a = do
@@ -134,19 +156,23 @@ conv2d w padding x = compute $ A.concat' (Dim 3) results
 infixl 9 ~>
 (~>) :: (a -> b) -> (b -> c) -> a -> c
 f ~> g = g. f
+{-# INLINE (~>) #-}
 
 -- Train with static (no grad) features
+
+lenetFeatures :: Array U Ix3 Float -> Array U Ix1 Float
+lenetFeatures = conv2d w0 (Padding (Sz3 0 2 2) (Sz3 0 2 2) (Fill 0.0))
+              ~> relu
+              ~> maxpool2
+              ~> conv2d w1 noPadding
+              ~> relu
+              ~> maxpool2
+              ~> resize' (Sz (3 * 5 * 5))
 
 testLeNet :: IO ()
 testLeNet = do
   -- By convention, the first dimension is channels
   let im1channel = resize' (Sz (1 :> 28 :. 28)) im
-      lenetFeatures = conv2d w0 (Padding (Sz3 0 2 2) (Sz3 0 2 2) (Fill 0.0))
-                    ~> relu
-                    ~> maxpool2
-                    ~> conv2d w1 noPadding
-                    ~> relu
-                    ~> maxpool2
       featureMaps2 = lenetFeatures im1channel
 
   print $ size featureMaps2
