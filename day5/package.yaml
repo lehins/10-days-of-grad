@@ -18,6 +18,7 @@ dependencies:
 - array
 - backprop
 # - splitmix
+- ghc-prim
 
 library:
   source-dirs: src

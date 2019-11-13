@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 2b61e6b57dda2be3f4bfdd798fd0e52cabe32aa45e7232a5116f3c8e235667e9
+-- hash: 02cb37da44bb30ba323f8cdf2b8697154e6df5ffd07a2314b8b51aa3910be04c
 
 name:           conv
 version:        0.0.0
@@ -30,6 +30,7 @@ library
     , array
     , backprop
     , base >=4.7 && <4.13
+    , ghc-prim
     , massiv >=0.4.3.0 && <0.5
     , mwc-random
     , streamly
@@ -49,6 +50,7 @@ executable conv
     , base >=4.7 && <4.13
     , conv
     , deepseq
+    , ghc-prim
     , massiv >=0.4.3.0 && <0.5
     , massiv-io
     , mnist-idx
@@ -74,6 +76,7 @@ benchmark default
     , base >=4.7 && <4.13
     , conv
     , criterion
+    , ghc-prim
     , massiv >=0.4.3.0 && <0.5
     , mwc-random
     , streamly

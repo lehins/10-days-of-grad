@@ -3,9 +3,11 @@ import           Data.Massiv.Array hiding ( map, zip, unzip, zipWith, mapM_ )
 import qualified Data.Massiv.Array as A
 import qualified Data.Massiv.Array.Manifest.Vector as A
 import           Data.List ( foldl' )
+import Control.Monad as M
+import Control.Exception (throw)
 
-import           Weights ( im, w0, w1 )
-import           NeuralNetwork ( conv2d_ )
+import           Weights ( im, w0, w1, w0s )
+import           NeuralNetwork ( conv2d3_, conv2d'_, conv2d_ )
 
 
 -- | 2D convolution on individual image
@@ -22,6 +24,8 @@ conv2dl' padding w x = compute res
                                   conv = computeAs U $ applyStencil padding stencil x
                               in computeAs U $ append' 3 prev conv) base [1..cout - 1]
 
+
+
 main :: IO ()
 main = do
   let pad2 = Padding (Sz2 2 2) (Sz2 2 2) (Fill 0.0) :: Padding Ix2 Float
@@ -32,6 +36,8 @@ main = do
       fm' = computeAs U. conv2d_ pad2 w0. resize' (Sz (1 :> 1 :> 28 :. 28)) $ im
       fm3 = computeAs U. conv2d_ pad2 w0. computeAs U. expandWithin Dim4 bs1 const. resize' (Sz (1 :> 28 :. 28)) $ im
       bs1 = 64 :: Sz1
+      w0p = computeAs P w0
+      w1p = computeAs P w1
   defaultMain
     [ bgroup
         "Conv2d: no batches (3D)"
@@ -60,54 +66,94 @@ main = do
         ]
 
     , bgroup
-        "Conv2d: batch size 1 (4D)"
+        "Conv2dM: batch size 1 (4D)"
         [ bgroup
             "1 chan -> 3 chan, with padding"
             [ env
                 (return (setComp Seq $ resize' (Sz (1 :> 1 :> 28 :. 28)) im))
                 (bench "Seq".
-                 whnf (computeAs U. conv2d_ pad2 w0))
+                 whnf (conv2d_ pad2 w0))
             , env
                 (return (setComp Par $ resize' (Sz (1 :> 1 :> 28 :. 28)) im))
                 (bench "Par".
-                 whnf (computeAs U. conv2d_ pad2 w0))
+                 whnf (conv2d_ pad2 w0))
             ]
         , bgroup
             "3 chan -> 3 chan, no padding"
             [ env
                 (return (setComp Seq $ computeAs U fm'))
                 (bench "Seq".
-                 whnf (computeAs U. conv2d_ nopad2 w1))
+                 whnf (conv2d_ nopad2 w1))
             , env
                 (return (setComp Par $ computeAs U fm'))
                 (bench "Par".
-                 whnf (computeAs U. conv2d_ nopad2 w1))
+                 whnf (conv2d_ nopad2 w1))
             ]
         ]
+
+    -- , bgroup
+    --     "Conv2dM Alt: batch size 1 (4D)"
+    --     [ bgroup
+    --         "1 chan -> 3 chan, with padding"
+    --         [ env
+    --             (return (setComp Seq $ resize' (Sz (1 :> 1 :> 28 :. 28)) im))
+    --             (bench "Seq".
+    --              whnf (conv2d_ pad2 w0))
+    --         , env
+    --             (return (setComp Par $ resize' (Sz (1 :> 1 :> 28 :. 28)) im))
+    --             (bench "Par".
+    --              whnf (conv2d_ pad2 w0))
+    --         ]
+    --     , bgroup
+    --         "3 chan -> 3 chan, no padding"
+    --         [ env
+    --             (return (setComp Seq $ computeAs U fm'))
+    --             (bench "Seq".
+    --              whnf (conv2d_ nopad2 w1))
+    --         , env
+    --             (return (setComp Par $ computeAs U fm'))
+    --             (bench "Par".
+    --              whnf (conv2d_ nopad2 w1))
+    --         ]
+    --     ]
 
     , bgroup
         ("Conv2d: batch size " ++ show bs1 ++ " (4D)")  -- Increased batch size to see if parallelization is useful
         [ bgroup
             "1 chan -> 3 chan, with padding"
             [ env
-                (return (setComp Seq $ computeAs U $ expandWithin Dim4 bs1 const $ resize' (Sz (1 :> 28 :. 28)) im))
+                (return (setComp Seq $ computeAs P $ expandWithin Dim4 bs1 const $ resize' (Sz (1 :> 28 :. 28)) im))
                 (bench "Seq".
-                 whnf (computeAs U. conv2d_ pad2 w0))
+                 whnf (conv2d'_ pad2 w0p))
             , env
-                (return (setComp Par $ computeAs U $ expandWithin Dim4 bs1 const $ resize' (Sz (1 :> 28 :. 28)) im))
+                (return (setComp Par $ computeAs P $ expandWithin Dim4 bs1 const $ resize' (Sz (1 :> 28 :. 28)) im))
                 (bench "Par".
-                 whnf (computeAs U. conv2d_ pad2 w0))
+                 whnf (conv2d'_ pad2 w0p))
             ]
         , bgroup
             "3 chan -> 3 chan, no padding"
             [ env
-                (return (setComp Seq $ computeAs U fm3))
+                (return (setComp Seq $ computeAs P fm3))
                 (bench "Seq".
-                 whnf (computeAs U. conv2d_ nopad2 w1))
+                 whnf (conv2d'_ nopad2 w1p))
             , env
-                (return (setComp Par $ computeAs U fm3))
+                (return (setComp Par $ computeAs P fm3))
                 (bench "Par".
-                 whnf (computeAs U. conv2d_ nopad2 w1))
+                 whnf (conv2d'_ nopad2 w1p))
+            ]
+        ]
+    , bgroup
+        ("Conv2d: (STENCIL) batch size " ++ show bs1 ++ " (4D)")  -- Increased batch size to see if parallelization is useful
+        [ bgroup
+            "1 chan -> 3 chan, with padding"
+            [ env
+                (return (setComp Seq $ computeAs P $ expandWithin Dim4 bs1 const $ resize' (Sz (1 :> 28 :. 28)) im))
+                (bench "Seq".
+                 whnf (conv2d3_ pad2))
+            , env
+                (return (setComp Par $ computeAs P $ expandWithin Dim4 bs1 const $ resize' (Sz (1 :> 28 :. 28)) im))
+                (bench "Par".
+                 whnf (conv2d3_ pad2))
             ]
         ]
 

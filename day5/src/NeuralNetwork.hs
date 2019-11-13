@@ -19,6 +19,8 @@ module NeuralNetwork
   , relu_
   , conv2d
   , conv2d_
+  , conv2d'_
+  , conv2d3_
   , maxpool
   , maxpool_
   , NeuralNetwork.flatten
@@ -57,7 +59,8 @@ import           Streamly
 import qualified Streamly.Prelude as S
 import           Numeric.Backprop
 import           Data.List ( foldl' )
-
+import GHC.Magic
+import Weights (w0s)
 -- Note that images are volumes of channels x width x height, whereas
 -- mini-batches are volumes-4 of batch size x channels x width x height.
 -- Similarly, convolutional filter weights are volumes-4 of
@@ -93,6 +96,51 @@ conv2d_ (Padding (Sz szp1) (Sz szp2) be) w x = compute res
     -- channel
     res = foldl' (\prev ch -> let conv = computeAs U $ applyStencil pad4 (sten ch) x
                               in computeAs U $ append' 3 prev conv) base [1..cout - 1]
+
+
+conv2d'_
+       :: Padding Ix2 Float  -- ^ Image plane padding
+       -> Array P Ix4 Float  -- ^ Weights
+       -> Array P Ix4 Float  -- ^ Batch of input features
+       -> Array P Ix4 Float  -- ^ Output features
+conv2d'_ (Padding (Sz szp1) (Sz szp2) be) w x = compute res
+  where
+    (Sz (cout :> cin :> x1 :. x2)) = size w
+    -- Extract weights, add fake Dim4, and make stencil
+    sten = makeCorrelationStencilFromKernel . resize' (Sz4 1 cin x1 x2) . (w !>)
+    {-# INLINE sten #-}
+    -- Add zeroes in batch and channel dimensions
+    pad4 = Padding (Sz (0 :> 0 :> szp1)) (Sz (0 :> 0 :> szp2)) be
+    -- Note: we apply stencils on zero channel of *all* images in the batch
+    base = computeAs P $ applyStencil pad4 (sten 0) x
+    -- Again, stencils are applied simultaneously on all images for a given
+    -- channel
+    res = foldl' (\prev ch -> let conv = computeAs P $ applyStencil pad4 (sten ch) x
+                              in computeAs P $ append' 3 prev conv) base [1..cout - 1]
+{-# INLINE conv2d'_ #-}
+
+conv2d3_ ::
+     Padding Ix2 Float -- ^ Image plane padding
+  -- -> ((Sz2 -> Sz4) -> (Ix2 -> Ix4) -> ( Stencil Ix4 Float Float
+  --                                     , Stencil Ix4 Float Float
+  --                                     , Stencil Ix4 Float Float)) -- ^ Weights maker
+  -> Array P Ix4 Float -- ^ Batch of input features
+  -> Array P Ix4 Float -- ^ Output features
+conv2d3_ (Padding (Sz szp1) (Sz szp2) be) x = compute res
+  where
+    (ws0, ws1, ws2) =
+      w0s (\(Sz2 m n) -> Sz (1 :> 1 :> m :. n)) (\ix -> 0 :> 0 :> ix)
+    pad4 = Padding (Sz (0 :> 0 :> szp1)) (Sz (0 :> 0 :> szp2)) be
+    res =
+      append'
+        3
+        (computeAs P $ applyStencil pad4 (inline ws0) x)
+        (computeAs P $
+         (append'
+            3
+            (computeAs P $ applyStencil pad4 (inline ws1) x)
+            (computeAs P $ applyStencil pad4 (inline ws2) x)))
+{-# INLINE conv2d3_ #-}
 
 -- | 2D convolution with gradients
 conv2d :: Reifies s W
